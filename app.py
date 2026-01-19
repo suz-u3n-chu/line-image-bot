@@ -113,10 +113,10 @@ def generate_and_send_image(user_id: str, prompt: str):
     try:
         logger.info(f"Generating image with prompt: {prompt}")
         
-        # Generate image using Imagen 3
-        # Updated to use newer model version to avoid 404
+        # Generate image using Imagen 4 (Confirmed available)
+        # We found 'models/imagen-4.0-generate-001' in the model list
         response = genai_client.models.generate_images(
-            model='imagen-3.0-generate-002',
+            model='imagen-4.0-generate-001',
             prompt=prompt,
             config=types.GenerateImagesConfig(
                 number_of_images=1,
