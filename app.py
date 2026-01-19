@@ -113,11 +113,10 @@ def generate_and_send_image(user_id: str, prompt: str):
     try:
         logger.info(f"Generating image with prompt: {prompt}")
         
-        # Generate image using Imagen 3 (latest Google image generation model)
-        # Note: While "Nano Banana Pro" refers to Gemini's image capabilities,
-        # the standalone image generation uses Imagen 3 API
+        # Generate image using Imagen 3
+        # Updated to use newer model version to avoid 404
         response = genai_client.models.generate_images(
-            model='imagen-3.0-generate-001',  # Latest Imagen 3 model
+            model='imagen-3.0-generate-002',
             prompt=prompt,
             config=types.GenerateImagesConfig(
                 number_of_images=1,
