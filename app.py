@@ -113,10 +113,10 @@ def generate_and_send_image(user_id: str, prompt: str):
     try:
         logger.info(f"Generating image with prompt: {prompt}")
         
-        # Generate image using Nano Banana Pro (Gemini 3 Pro Image)
-        # Switching to this model as Imagen 4 requires billing
+        # Generate image using Imagen 4
+        # Requires billing to be enabled in Google Cloud Project
         response = genai_client.models.generate_images(
-            model='nano-banana-pro-preview',
+            model='imagen-4.0-generate-001',
             prompt=prompt,
             config=types.GenerateImagesConfig(
                 number_of_images=1,
