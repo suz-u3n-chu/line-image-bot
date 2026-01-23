@@ -26,8 +26,12 @@ import cloudinary
 import cloudinary.uploader
 from dotenv import load_dotenv
 
-# Load environment variables
+# Load environment variables and strip whitespace
 load_dotenv()
+
+def get_env_stripped(key, default=None):
+    val = os.getenv(key, default)
+    return val.strip() if val else val
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -37,14 +41,22 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # LINE Bot configuration
-line_configuration = Configuration(access_token=os.getenv('LINE_CHANNEL_ACCESS_TOKEN'))
-handler = WebhookHandler(os.getenv('LINE_CHANNEL_SECRET'))
+line_access_token = get_env_stripped('LINE_CHANNEL_ACCESS_TOKEN')
+line_channel_secret = get_env_stripped('LINE_CHANNEL_SECRET')
+
+line_configuration = Configuration(access_token=line_access_token)
+handler = WebhookHandler(line_channel_secret)
 
 # Google AI configuration
-genai_client = genai.Client(api_key=os.getenv('GOOGLE_API_KEY'))
+google_api_key = get_env_stripped('GOOGLE_API_KEY')
+genai_client = genai.Client(api_key=google_api_key)
 
 # Cloudinary configuration
-cloudinary.config(cloudinary_url=os.getenv('CLOUDINARY_URL'))
+cloudinary_url = get_env_stripped('CLOUDINARY_URL')
+if cloudinary_url:
+    cloudinary.config(cloudinary_url=cloudinary_url)
+else:
+    logger.warning("CLOUDINARY_URL is missing!")
 
 
 @app.route("/", methods=['GET'])
@@ -87,10 +99,14 @@ def callback():
 
     # Handle webhook body
     try:
+        logger.info("Signature verification and handling body...")
         handler.handle(body, signature)
     except InvalidSignatureError:
-        logger.error("Invalid signature. Check your channel secret.")
+        logger.error("INVALID SIGNATURE. Check your LINE_CHANNEL_SECRET.")
         abort(400)
+    except Exception as e:
+        logger.error(f"UNEXPECTED ERROR in callback: {str(e)}", exc_info=True)
+        return 'Internal Server Error', 500
 
     return 'OK'
 
@@ -100,37 +116,48 @@ def handle_text_message(event):
     """Handle incoming text messages and generate images"""
     user_message = event.message.text
     user_id = event.source.user_id
+    reply_token = event.reply_token
     
-    logger.info(f"Received message from {user_id}: {user_message}")
+    logger.info(f"MATCHED: TextMessageEvent from {user_id}: {user_message}")
     
     # Send immediate response to acknowledge receipt
     with ApiClient(line_configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
         
         try:
+            logger.info(f"Sending 'generating' reply to token {reply_token}...")
             # Reply with acknowledgment
             line_bot_api.reply_message(
                 ReplyMessageRequest(
-                    reply_token=event.reply_token,
+                    reply_token=reply_token,
                     messages=[TextMessage(text="🎨 画像を生成中です... しばらくお待ちください")]
                 )
             )
+            logger.info("Reply sent successfully. Starting background thread...")
             
             # Generate image asynchronously using a thread
             thread = threading.Thread(target=generate_and_send_image, args=(user_id, user_message))
             thread.start()
             
         except Exception as e:
-            logger.error(f"CRITICAL: Failed to reply or start thread: {str(e)}", exc_info=True)
+            logger.error(f"CRITICAL in handle_text_message: {str(e)}", exc_info=True)
             try:
+                # Re-using the same api_client/line_bot_api here
                 line_bot_api.reply_message(
                     ReplyMessageRequest(
-                        reply_token=event.reply_token,
+                        reply_token=reply_token,
                         messages=[TextMessage(text=f"❌ システムエラーが発生しました:\n{str(e)}")]
                     )
                 )
             except Exception as reply_err:
-                logger.error(f"Failed to even send error reply: {str(reply_err)}")
+                logger.error(f"Double crash: Failed to send error reply: {str(reply_err)}")
+
+
+@handler.default()
+def default_handler(event):
+    """Diagnostic handler for all other events"""
+    logger.info(f"RECEIVED OTHER EVENT: {type(event).__name__}")
+    logger.info(f"Event details: {event}")
 
 
 def generate_and_send_image(user_id: str, prompt: str):
