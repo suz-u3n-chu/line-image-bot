@@ -74,6 +74,7 @@ else:
 @app.route("/", methods=['GET'])
 def health_check():
     """Health check endpoint"""
+    logger.info("--- HEALTH CHECK PINGED ---")
     return "LINE Bot is running! 🤖✨", 200
 
 
@@ -90,10 +91,12 @@ def debug_status():
     for key in keys_to_check:
         val = os.getenv(key)
         if val:
-            status[key] = f"SET (Length: {len(val)}, Start: {val[:4]}...)"
+            status[key] = f"SET (Len: {len(val)})"
         else:
             status[key] = "MISSING"
     
+    status['log_count'] = len(log_buffer)
+    status['server_time'] = os.popen('date').read().strip()
     return status, 200
 
 
