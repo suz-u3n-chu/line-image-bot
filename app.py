@@ -6,6 +6,7 @@ Generates AI images based on user text messages using Google's latest Imagen 3 m
 import os
 import io
 import logging
+import threading
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
@@ -95,8 +96,9 @@ def handle_text_message(event):
                 )
             )
             
-            # Generate image asynchronously
-            generate_and_send_image(user_id, user_message)
+            # Generate image asynchronously using a thread
+            thread = threading.Thread(target=generate_and_send_image, args=(user_id, user_message))
+            thread.start()
             
         except Exception as e:
             logger.error(f"Error handling message: {str(e)}")
