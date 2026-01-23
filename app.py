@@ -53,6 +53,26 @@ def health_check():
     return "LINE Bot is running! 🤖✨", 200
 
 
+@app.route("/debug", methods=['GET'])
+def debug_status():
+    """Diagnostic endpoint to check if environment variables are set"""
+    keys_to_check = [
+        'LINE_CHANNEL_ACCESS_TOKEN', 
+        'LINE_CHANNEL_SECRET', 
+        'GOOGLE_API_KEY', 
+        'CLOUDINARY_URL'
+    ]
+    status = {}
+    for key in keys_to_check:
+        val = os.getenv(key)
+        if val:
+            status[key] = f"SET (Length: {len(val)}, Start: {val[:4]}...)"
+        else:
+            status[key] = "MISSING"
+    
+    return status, 200
+
+
 @app.route("/callback", methods=['POST'])
 def callback():
     """LINE webhook callback endpoint"""
@@ -101,13 +121,16 @@ def handle_text_message(event):
             thread.start()
             
         except Exception as e:
-            logger.error(f"Error handling message: {str(e)}")
-            line_bot_api.reply_message(
-                ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[TextMessage(text=f"❌ エラーが発生しました: {str(e)}")]
+            logger.error(f"CRITICAL: Failed to reply or start thread: {str(e)}", exc_info=True)
+            try:
+                line_bot_api.reply_message(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[TextMessage(text=f"❌ システムエラーが発生しました:\n{str(e)}")]
+                    )
                 )
-            )
+            except Exception as reply_err:
+                logger.error(f"Failed to even send error reply: {str(reply_err)}")
 
 
 def generate_and_send_image(user_id: str, prompt: str):
@@ -138,6 +161,7 @@ def generate_and_send_image(user_id: str, prompt: str):
         logger.info("Image generated successfully")
         
         # Upload to Cloudinary
+        logger.info("Uploading image to Cloudinary...")
         upload_result = cloudinary.uploader.upload(
             io.BytesIO(image_bytes),
             folder="line-bot-images",
