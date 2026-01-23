@@ -7,6 +7,7 @@ import os
 import io
 import logging
 import threading
+from collections import deque
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
@@ -33,9 +34,20 @@ def get_env_stripped(key, default=None):
     val = os.getenv(key, default)
     return val.strip() if val else val
 
-# Configure logging
+# Configure logging with buffer for remote debugging
+log_buffer = deque(maxlen=100)
+
+class BufferHandler(logging.Handler):
+    def emit(self, record):
+        log_buffer.append(self.format(record))
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+buffer_handler = BufferHandler()
+buffer_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logger.addHandler(buffer_handler)
+logging.getLogger('linebot').addHandler(buffer_handler) # Also capture line-bot logs
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -83,6 +95,12 @@ def debug_status():
             status[key] = "MISSING"
     
     return status, 200
+
+
+@app.route("/logs", methods=['GET'])
+def view_logs():
+    """Endpoint to view the last 100 log lines"""
+    return "<pre>" + "\n".join(log_buffer) + "</pre>", 200
 
 
 @app.route("/callback", methods=['POST'])
