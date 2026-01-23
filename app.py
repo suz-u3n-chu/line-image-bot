@@ -99,8 +99,8 @@ def debug_status():
 
 @app.route("/logs", methods=['GET'])
 def view_logs():
-    """Endpoint to view the last 100 log lines"""
-    return "<pre>" + "\n".join(log_buffer) + "</pre>", 200
+    """Endpoint to view the last 100 log lines as JSON"""
+    return {"logs": list(log_buffer)}, 200
 
 
 @app.route("/callback", methods=['POST'])
@@ -136,6 +136,7 @@ def handle_text_message(event):
     user_id = event.source.user_id
     reply_token = event.reply_token
     
+    print(f"DEBUG: MATCHED TextMessage: {user_message}")
     logger.info(f"MATCHED: TextMessageEvent from {user_id}: {user_message}")
     
     # Send immediate response to acknowledge receipt
@@ -143,7 +144,7 @@ def handle_text_message(event):
         line_bot_api = MessagingApi(api_client)
         
         try:
-            logger.info(f"Sending 'generating' reply to token {reply_token}...")
+            print(f"DEBUG: Replying to token {reply_token}...")
             # Reply with acknowledgment
             line_bot_api.reply_message(
                 ReplyMessageRequest(
@@ -151,16 +152,15 @@ def handle_text_message(event):
                     messages=[TextMessage(text="🎨 画像を生成中です... しばらくお待ちください")]
                 )
             )
-            logger.info("Reply sent successfully. Starting background thread...")
+            print("DEBUG: Reply sent.")
             
-            # Generate image asynchronously using a thread
-            thread = threading.Thread(target=generate_and_send_image, args=(user_id, user_message))
-            thread.start()
+            # Synchronous for debugging
+            generate_and_send_image(user_id, user_message)
             
         except Exception as e:
+            print(f"DEBUG ERROR in handler: {str(e)}")
             logger.error(f"CRITICAL in handle_text_message: {str(e)}", exc_info=True)
             try:
-                # Re-using the same api_client/line_bot_api here
                 line_bot_api.reply_message(
                     ReplyMessageRequest(
                         reply_token=reply_token,
@@ -168,7 +168,7 @@ def handle_text_message(event):
                     )
                 )
             except Exception as reply_err:
-                logger.error(f"Double crash: Failed to send error reply: {str(reply_err)}")
+                logger.error(f"Double crash: {str(reply_err)}")
 
 
 @handler.default()
