@@ -100,6 +100,19 @@ def debug_status():
     
     status['log_count'] = len(log_buffer)
     status['server_time'] = os.popen('date').read().strip()
+    
+    # Check Cloudinary configuration detail
+    if cloudinary_url:
+        try:
+            # Simple parsing of cloudinary://key:secret@cloudname
+            parts = cloudinary_url.split('@')
+            if len(parts) > 1:
+                status['cloudinary_cloud_name'] = parts[1]
+            else:
+                status['cloudinary_cloud_name'] = "INVALID_FORMAT (MISSING_@)"
+        except Exception:
+            status['cloudinary_cloud_name'] = "PARSE_ERROR"
+            
     return status, 200
 
 
