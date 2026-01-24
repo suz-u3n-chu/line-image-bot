@@ -170,9 +170,17 @@ def handle_text_message(event):
         line_bot_api = MessagingApi(api_client)
         
         try:
+            print(f"DEBUG: Sending immediate reply to token {reply_token}...")
+            # Reply with acknowledgment
+            line_bot_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=reply_token,
+                    messages=[TextMessage(text="🎨 画像を生成中です... しばらくお待ちください")]
+                )
+            )
             print("DEBUG: Reply sent. Starting background thread...")
             
-            # Use background thread again to prevent LINE timeouts
+            # Use background thread to prevent LINE timeouts
             thread = threading.Thread(target=generate_and_send_image, args=(user_id, user_message))
             thread.start()
             
