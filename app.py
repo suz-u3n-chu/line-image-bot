@@ -101,17 +101,17 @@ def debug_status():
     status['log_count'] = len(log_buffer)
     status['server_time'] = os.popen('date').read().strip()
     
-    # Check Cloudinary configuration detail
-    if cloudinary_url:
+    # Explicitly check the environment for the cloud name part
+    c_url = os.getenv('CLOUDINARY_URL')
+    if c_url:
         try:
             # Simple parsing of cloudinary://key:secret@cloudname
-            parts = cloudinary_url.split('@')
-            if len(parts) > 1:
-                status['cloudinary_cloud_name'] = parts[1]
+            if '@' in c_url:
+                status['cloudinary_cloud_name_detected'] = c_url.split('@')[-1]
             else:
-                status['cloudinary_cloud_name'] = "INVALID_FORMAT (MISSING_@)"
-        except Exception:
-            status['cloudinary_cloud_name'] = "PARSE_ERROR"
+                status['cloudinary_cloud_name_detected'] = "MISSING_@_IN_URL"
+        except Exception as e:
+            status['cloudinary_cloud_name_detected'] = f"ERROR: {str(e)}"
             
     return status, 200
 
@@ -219,7 +219,7 @@ def generate_and_send_image(user_id: str, prompt: str):
         
         # Step 2: Cloudinary Upload
         try:
-            print("DEBUG: Uploading to Cloudinary...")
+            print(f"DEBUG: Uploading to Cloudinary (URL format check: {'@' in (cloudinary_url or '')})...")
             upload_result = cloudinary.uploader.upload(
                 io.BytesIO(image_bytes),
                 folder="line-bot-images",
