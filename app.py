@@ -91,7 +91,10 @@ def debug_status():
     for key in keys_to_check:
         val = os.getenv(key)
         if val:
-            status[key] = f"SET (Len: {len(val)})"
+            if "api_key" in val or "your_" in val:
+                 status[key] = f"WARNING: Likely Placeholder (Len: {len(val)})"
+            else:
+                 status[key] = f"SET (Len: {len(val)})"
         else:
             status[key] = "MISSING"
     
@@ -154,18 +157,11 @@ def handle_text_message(event):
         line_bot_api = MessagingApi(api_client)
         
         try:
-            print(f"DEBUG: Replying to token {reply_token}...")
-            # Reply with acknowledgment
-            line_bot_api.reply_message(
-                ReplyMessageRequest(
-                    reply_token=reply_token,
-                    messages=[TextMessage(text="🎨 画像を生成中です... しばらくお待ちください")]
-                )
-            )
-            print("DEBUG: Reply sent.")
+            print("DEBUG: Reply sent. Starting background thread...")
             
-            # Synchronous for debugging
-            generate_and_send_image(user_id, user_message)
+            # Use background thread again to prevent LINE timeouts
+            thread = threading.Thread(target=generate_and_send_image, args=(user_id, user_message))
+            thread.start()
             
         except Exception as e:
             print(f"DEBUG ERROR in handler: {str(e)}")
@@ -189,76 +185,82 @@ def default_handler(event):
 
 
 def generate_and_send_image(user_id: str, prompt: str):
-    """Generate image using Google Imagen 3 and send to user"""
+    """Generate image using Google AI and send to user"""
     try:
-        logger.info(f"Generating image with prompt: {prompt}")
+        print(f"DEBUG: Generating image for prompt: '{prompt}'")
         
-        # Generate image using Imagen 4
-        # Requires billing to be enabled in Google Cloud Project
-        response = genai_client.models.generate_images(
-            model='imagen-4.0-generate-001',
-            prompt=prompt,
-            config=types.GenerateImagesConfig(
-                number_of_images=1,
-                # Optional: Configure additional parameters
-                # aspect_ratio='1:1',  # Options: '1:1', '3:4', '4:3', '9:16', '16:9'
-                # safety_filter_level='block_some',  # Options: 'block_some', 'block_few', 'block_fewest'
+        # Step 1: AI Image Generation
+        try:
+            response = genai_client.models.generate_images(
+                model='imagen-4.0-generate-001',
+                prompt=prompt,
+                config=types.GenerateImagesConfig(number_of_images=1)
             )
-        )
+            if not response.generated_images:
+                raise ValueError("Google AI returned no images")
+            image_bytes = response.generated_images[0].image.image_bytes
+            print("DEBUG: AI generation SUCCESS")
+        except Exception as gen_err:
+            print(f"DEBUG: AI Generation FAILED: {str(gen_err)}")
+            raise Exception(f"Google AI画像生成エラー: {str(gen_err)}")
         
-        # Get the generated image
-        if not response.generated_images:
-            raise ValueError("No image was generated")
-        
-        generated_image = response.generated_images[0]
-        image_bytes = generated_image.image.image_bytes
-        
-        logger.info("Image generated successfully")
-        
-        # Upload to Cloudinary
-        logger.info("Uploading image to Cloudinary...")
-        upload_result = cloudinary.uploader.upload(
-            io.BytesIO(image_bytes),
-            folder="line-bot-images",
-            resource_type="image"
-        )
-        
-        image_url = upload_result.get('secure_url')
-        logger.info(f"Image uploaded to Cloudinary: {image_url}")
-        
-        # Send image to user via Push API
-        with ApiClient(line_configuration) as api_client:
-            line_bot_api = MessagingApi(api_client)
-            line_bot_api.push_message(
-                PushMessageRequest(
-                    to=user_id,
-                    messages=[
-                        TextMessage(text=f"✨ 画像が生成されました！\n\nプロンプト: {prompt}"),
-                        ImageMessage(
-                            original_content_url=image_url,
-                            preview_image_url=image_url
-                        )
-                    ]
-                )
+        # Step 2: Cloudinary Upload
+        try:
+            print("DEBUG: Uploading to Cloudinary...")
+            upload_result = cloudinary.uploader.upload(
+                io.BytesIO(image_bytes),
+                folder="line-bot-images",
+                resource_type="image"
             )
+            image_url = upload_result.get('secure_url')
+            if not image_url:
+                raise ValueError("Cloudinary returned no URL")
+            print(f"DEBUG: Upload SUCCESS: {image_url}")
+        except Exception as up_err:
+            print(f"DEBUG: Cloudinary Upload FAILED: {str(up_err)}")
+            # Specifically check for the common placeholder error
+            detailed_err = str(up_err)
+            if "api_key" in detailed_err.lower():
+                detailed_err += " (CloudinaryのURL設定が初期値のままの可能性があります)"
+            raise Exception(f"Cloudinaryアップロードエラー: {detailed_err}")
         
-        logger.info(f"Image sent to user {user_id}")
-        
-    except Exception as e:
-        logger.error(f"Error generating image: {str(e)}")
-        
-        # Send error message to user
+        # Step 3: LINE Push Message
         try:
             with ApiClient(line_configuration) as api_client:
                 line_bot_api = MessagingApi(api_client)
                 line_bot_api.push_message(
                     PushMessageRequest(
                         to=user_id,
-                        messages=[TextMessage(text=f"❌ 画像生成中にエラーが発生しました:\n{str(e)}")]
+                        messages=[
+                            TextMessage(text=f"✨ 画像が生成されました！\n\nプロンプト: {prompt}"),
+                            ImageMessage(
+                                original_content_url=image_url,
+                                preview_image_url=image_url
+                            )
+                        ]
                     )
                 )
-        except Exception as push_error:
-            logger.error(f"Error sending error message: {str(push_error)}")
+            print("DEBUG: LINE Push SUCCESS")
+        except Exception as line_err:
+            print(f"DEBUG: LINE Push FAILED: {str(line_err)}")
+            raise Exception(f"LINE送信エラー: {str(line_err)}")
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Worker Error: {error_msg}")
+        
+        # Send FINAL error message to user via Push API
+        try:
+            with ApiClient(line_configuration) as api_client:
+                line_bot_api = MessagingApi(api_client)
+                line_bot_api.push_message(
+                    PushMessageRequest(
+                        to=user_id,
+                        messages=[TextMessage(text=f"❌ 処理中にエラーが発生しました:\n{error_msg}")]
+                    )
+                )
+        except Exception as final_err:
+            logger.error(f"Could not even send final error: {str(final_err)}")
 
 
 if __name__ == "__main__":
