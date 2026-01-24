@@ -109,23 +109,29 @@ def view_logs():
 @app.route("/callback", methods=['POST'])
 def callback():
     """LINE webhook callback endpoint"""
+    print(">>> CALLBACK RECEIVED <<<")
     # Get X-Line-Signature header value
     signature = request.headers.get('X-Line-Signature')
     if not signature:
+        print("ERROR: No signature header")
         abort(400)
 
     # Get request body as text
     body = request.get_data(as_text=True)
+    print(f"DEBUG: Body length: {len(body)}")
     logger.info(f"Request body: {body}")
 
     # Handle webhook body
     try:
-        logger.info("Signature verification and handling body...")
+        print("DEBUG: Verifying signature...")
         handler.handle(body, signature)
+        print("DEBUG: Handler finished successfully")
     except InvalidSignatureError:
+        print("ERROR: Invalid signature")
         logger.error("INVALID SIGNATURE. Check your LINE_CHANNEL_SECRET.")
         abort(400)
     except Exception as e:
+        print(f"ERROR: Unexpected error in callback: {str(e)}")
         logger.error(f"UNEXPECTED ERROR in callback: {str(e)}", exc_info=True)
         return 'Internal Server Error', 500
 
@@ -135,11 +141,12 @@ def callback():
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_text_message(event):
     """Handle incoming text messages and generate images"""
+    print(">>> HANDLER: handle_text_message triggered <<<")
     user_message = event.message.text
     user_id = event.source.user_id
     reply_token = event.reply_token
     
-    print(f"DEBUG: MATCHED TextMessage: {user_message}")
+    print(f"DEBUG: Message content: '{user_message}' from {user_id}")
     logger.info(f"MATCHED: TextMessageEvent from {user_id}: {user_message}")
     
     # Send immediate response to acknowledge receipt
