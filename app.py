@@ -296,31 +296,41 @@ def default_handler(event):
 
 
 def generate_image_with_reference(user_id: str, prompt: str, reference_image_bytes: bytes):
-    """Edit reference image based on user prompt"""
+    """Edit reference image based on user prompt using Gemini 3 Pro"""
     try:
-        print(f"DEBUG: Editing image with prompt: '{prompt}'")
+        print(f"DEBUG: Editing image with Gemini 3 Pro, prompt: '{prompt}'")
         
-        # Direct image editing: pass reference image + edit prompt to generate_images
+        # Using generate_content instead of generate_images for Gemini 3 models
         try:
-            print("DEBUG: Editing image with Gemini...")
-            response = genai_client.models.generate_images(
-                model='imagen-4.0-generate-001',
-                prompt=f"元の画像をベースに、以下の編集を行ってください。元の構図や雰囲気はできるだけ保持してください。\n\n編集内容: {prompt}",
-                reference_images=[
+            response = genai_client.models.generate_content(
+                model='gemini-3-pro-image-preview',
+                contents=[
                     types.Part.from_bytes(
                         data=reference_image_bytes,
                         mime_type='image/jpeg'
-                    )
+                    ),
+                    f"Please edit this image based on the following instructions: {prompt}"
                 ],
-                config=types.GenerateImagesConfig(number_of_images=1)
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE"]
+                )
             )
-            if not response.generated_images:
-                raise ValueError("Google AI returned no images")
-            image_bytes = response.generated_images[0].image.image_bytes
+            
+            # Extract image bytes from response parts
+            image_bytes = None
+            if response.candidates and response.candidates[0].content.parts:
+                for part in response.candidates[0].content.parts:
+                    if part.inline_data:
+                        image_bytes = part.inline_data.data
+                        break
+            
+            if not image_bytes:
+                raise ValueError("Gemini 3 returned no image data in parts")
+                
             print("DEBUG: Image editing SUCCESS")
         except Exception as edit_err:
             print(f"DEBUG: Image Editing FAILED: {str(edit_err)}")
-            raise Exception(f"画像編集エラー: {str(edit_err)}")
+            raise Exception(f"Gemini 3 画像編集エラー: {str(edit_err)}")
         
         # Step 4: Upload to Cloudinary
         try:
@@ -391,20 +401,31 @@ def generate_and_send_image(user_id: str, prompt: str):
     try:
         print(f"DEBUG: Generating image for prompt: '{prompt}'")
         
-        # Step 1: AI Image Generation
+        # Step 1: Gemini 3 Image Generation
         try:
-            response = genai_client.models.generate_images(
-                model='imagen-4.0-generate-001',
-                prompt=prompt,
-                config=types.GenerateImagesConfig(number_of_images=1)
+            response = genai_client.models.generate_content(
+                model='gemini-3-pro-image-preview',
+                contents=[prompt],
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE"]
+                )
             )
-            if not response.generated_images:
-                raise ValueError("Google AI returned no images")
-            image_bytes = response.generated_images[0].image.image_bytes
+            
+            # Extract image bytes from response parts
+            image_bytes = None
+            if response.candidates and response.candidates[0].content.parts:
+                for part in response.candidates[0].content.parts:
+                    if part.inline_data:
+                        image_bytes = part.inline_data.data
+                        break
+            
+            if not image_bytes:
+                raise ValueError("Gemini 3 returned no image data in parts")
+                
             print("DEBUG: AI generation SUCCESS")
         except Exception as gen_err:
             print(f"DEBUG: AI Generation FAILED: {str(gen_err)}")
-            raise Exception(f"Google AI画像生成エラー: {str(gen_err)}")
+            raise Exception(f"Gemini 3 画像生成エラー: {str(gen_err)}")
         
         # Step 2: Cloudinary Upload
         try:
