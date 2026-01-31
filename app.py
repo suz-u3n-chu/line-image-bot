@@ -269,7 +269,7 @@ def handle_image_message(event):
             line_bot_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=reply_token,
-                    messages=[TextMessage(text="📸 画像を受け取りました！\n編集したい内容を送ってください。\n\n例：「空を夕焼けにして」「この車を赤くして」「壁の色を白に変えて」")]
+                    messages=[TextMessage(text="📸 画像を受け取りました！\n次にプロンプトを送ってください。\n\n例：「この建物を夜景にして」「同じ構図で春の風景に」")]
                 )
             )
             print(f"DEBUG: Image stored for user {user_id}")
@@ -296,41 +296,38 @@ def default_handler(event):
 
 
 def generate_image_with_reference(user_id: str, prompt: str, reference_image_bytes: bytes):
-    """Edit reference image based on user prompt using Gemini 3 Pro"""
+    """Generate image using Gemini 3 Pro (Nano Banana Pro) with reference image"""
     try:
-        print(f"DEBUG: Editing image with Gemini 3 Pro, prompt: '{prompt}'")
+        print(f"DEBUG: Generating image with Gemini 3 Pro for prompt: '{prompt}'")
         
-        # Using generate_content instead of generate_images for Gemini 3 models
+        # Combined Step: Image + Text -> Prompt -> New Image
         try:
             response = genai_client.models.generate_content(
                 model='gemini-3-pro-image-preview',
                 contents=[
-                    types.Part.from_bytes(
-                        data=reference_image_bytes,
-                        mime_type='image/jpeg'
-                    ),
-                    f"Please edit this image based on the following instructions: {prompt}"
+                    types.Part.from_bytes(data=reference_image_bytes, mime_type='image/jpeg'),
+                    prompt
                 ],
-                config=types.GenerateContentConfig(
-                    response_modalities=["IMAGE"]
-                )
+                config=types.GenerateContentConfig(response_modalities=['IMAGE'])
             )
             
-            # Extract image bytes from response parts
+            # Extract image bytes
             image_bytes = None
-            if response.candidates and response.candidates[0].content.parts:
+            if hasattr(response, 'generated_images') and response.generated_images:
+                image_bytes = response.generated_images[0].image.image_bytes
+            elif response.candidates and response.candidates[0].content.parts:
                 for part in response.candidates[0].content.parts:
                     if part.inline_data:
                         image_bytes = part.inline_data.data
                         break
             
             if not image_bytes:
-                raise ValueError("Gemini 3 returned no image data in parts")
+                raise ValueError("Gemini 3 Pro returned no images")
                 
-            print("DEBUG: Image editing SUCCESS")
-        except Exception as edit_err:
-            print(f"DEBUG: Image Editing FAILED: {str(edit_err)}")
-            raise Exception(f"Gemini 3 画像編集エラー: {str(edit_err)}")
+            print("DEBUG: Gemini 3 Pro generation SUCCESS")
+        except Exception as gen_err:
+            print(f"DEBUG: Gemini 3 Pro Generation FAILED: {str(gen_err)}")
+            raise Exception(f"Gemini 3 Pro生成エラー: {str(gen_err)}")
         
         # Step 4: Upload to Cloudinary
         try:
@@ -359,7 +356,7 @@ def generate_image_with_reference(user_id: str, prompt: str, reference_image_byt
                     PushMessageRequest(
                         to=user_id,
                         messages=[
-                            TextMessage(text=f"✨ 画像を編集しました！\n\n編集内容: {prompt}"),
+                            TextMessage(text=f"✨ 参照画像を元に新しい画像を生成しました！\n\nプロンプト: {prompt}"),
                             ImageMessage(
                                 original_content_url=image_url,
                                 preview_image_url=image_url
@@ -389,7 +386,7 @@ def generate_image_with_reference(user_id: str, prompt: str, reference_image_byt
                 line_bot_api.push_message(
                     PushMessageRequest(
                         to=user_id,
-                        messages=[TextMessage(text=f"❌ 画像編集中にエラーが発生しました:\n{error_msg}")]
+                        messages=[TextMessage(text=f"❌ 参照画像を使った生成中にエラーが発生しました:\n{error_msg}")]
                     )
                 )
         except Exception as final_err:
@@ -401,72 +398,70 @@ def generate_and_send_image(user_id: str, prompt: str):
     try:
         print(f"DEBUG: Generating image for prompt: '{prompt}'")
         
-        # Step 1: Gemini 3 Image Generation
-        try:
-            response = genai_client.models.generate_content(
-                model='gemini-3-pro-image-preview',
-                contents=[prompt],
-                config=types.GenerateContentConfig(
-                    response_modalities=["IMAGE"]
+    # Step 1: Gemini 3 Pro Image Generation
+    try:
+        response = genai_client.models.generate_content(
+            model='gemini-3-pro-image-preview',
+            contents=[prompt],
+            config=types.GenerateContentConfig(response_modalities=['IMAGE'])
+        )
+        # Extract image bytes
+        image_bytes = None
+        if hasattr(response, 'generated_images') and response.generated_images:
+            image_bytes = response.generated_images[0].image.image_bytes
+        elif response.candidates and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                if part.inline_data:
+                    image_bytes = part.inline_data.data
+                    break
+        
+        if not image_bytes:
+            raise ValueError("Gemini 3 Pro returned no images")
+        print("DEBUG: Gemini 3 Pro generation SUCCESS")
+    except Exception as gen_err:
+        print(f"DEBUG: Gemini 3 Pro Generation FAILED: {str(gen_err)}")
+        raise Exception(f"Gemini 3 Pro生成エラー: {str(gen_err)}")
+        
+    # Step 2: Cloudinary Upload
+    try:
+        print(f"DEBUG: Uploading to Cloudinary (URL format check: {'@' in (cloudinary_url or '')})...")
+        upload_result = cloudinary.uploader.upload(
+            io.BytesIO(image_bytes),
+            folder="line-bot-images",
+            resource_type="image"
+        )
+        image_url = upload_result.get('secure_url')
+        if not image_url:
+            raise ValueError("Cloudinary returned no URL")
+        print(f"DEBUG: Upload SUCCESS: {image_url}")
+    except Exception as up_err:
+        print(f"DEBUG: Cloudinary Upload FAILED: {str(up_err)}")
+        # Specifically check for the common placeholder error
+        detailed_err = str(up_err)
+        if "api_key" in detailed_err.lower():
+            detailed_err += " (CloudinaryのURL設定が初期値のままの可能性があります)"
+        raise Exception(f"Cloudinaryアップロードエラー: {detailed_err}")
+    
+    # Step 3: LINE Push Message
+    try:
+        with ApiClient(line_configuration) as api_client:
+            line_bot_api = MessagingApi(api_client)
+            line_bot_api.push_message(
+                PushMessageRequest(
+                    to=user_id,
+                    messages=[
+                        TextMessage(text=f"✨ 画像を生成しました！\n\nプロンプト: {prompt}"),
+                        ImageMessage(
+                            original_content_url=image_url,
+                            preview_image_url=image_url
+                        )
+                    ]
                 )
             )
-            
-            # Extract image bytes from response parts
-            image_bytes = None
-            if response.candidates and response.candidates[0].content.parts:
-                for part in response.candidates[0].content.parts:
-                    if part.inline_data:
-                        image_bytes = part.inline_data.data
-                        break
-            
-            if not image_bytes:
-                raise ValueError("Gemini 3 returned no image data in parts")
-                
-            print("DEBUG: AI generation SUCCESS")
-        except Exception as gen_err:
-            print(f"DEBUG: AI Generation FAILED: {str(gen_err)}")
-            raise Exception(f"Gemini 3 画像生成エラー: {str(gen_err)}")
-        
-        # Step 2: Cloudinary Upload
-        try:
-            print(f"DEBUG: Uploading to Cloudinary (URL format check: {'@' in (cloudinary_url or '')})...")
-            upload_result = cloudinary.uploader.upload(
-                io.BytesIO(image_bytes),
-                folder="line-bot-images",
-                resource_type="image"
-            )
-            image_url = upload_result.get('secure_url')
-            if not image_url:
-                raise ValueError("Cloudinary returned no URL")
-            print(f"DEBUG: Upload SUCCESS: {image_url}")
-        except Exception as up_err:
-            print(f"DEBUG: Cloudinary Upload FAILED: {str(up_err)}")
-            # Specifically check for the common placeholder error
-            detailed_err = str(up_err)
-            if "api_key" in detailed_err.lower():
-                detailed_err += " (CloudinaryのURL設定が初期値のままの可能性があります)"
-            raise Exception(f"Cloudinaryアップロードエラー: {detailed_err}")
-        
-        # Step 3: LINE Push Message
-        try:
-            with ApiClient(line_configuration) as api_client:
-                line_bot_api = MessagingApi(api_client)
-                line_bot_api.push_message(
-                    PushMessageRequest(
-                        to=user_id,
-                        messages=[
-                            TextMessage(text=f"✨ 画像が生成されました！\n\nプロンプト: {prompt}"),
-                            ImageMessage(
-                                original_content_url=image_url,
-                                preview_image_url=image_url
-                            )
-                        ]
-                    )
-                )
-            print("DEBUG: LINE Push SUCCESS")
-        except Exception as line_err:
-            print(f"DEBUG: LINE Push FAILED: {str(line_err)}")
-            raise Exception(f"LINE送信エラー: {str(line_err)}")
+        print("DEBUG: LINE Push SUCCESS")
+    except Exception as line_err:
+        print(f"DEBUG: LINE Push FAILED: {str(line_err)}")
+        raise Exception(f"LINE送信エラー: {str(line_err)}")
         
     except Exception as e:
         error_msg = str(e)
