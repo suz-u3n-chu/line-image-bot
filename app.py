@@ -16,6 +16,7 @@ from linebot.v3.messaging import (
     Configuration,
     ApiClient,
     MessagingApi,
+    MessagingApiBlob,
     ReplyMessageRequest,
     PushMessageRequest,
     TextMessage,
@@ -248,12 +249,13 @@ def handle_image_message(event):
         line_bot_api = MessagingApi(api_client)
         
         try:
-            # Download image from LINE
+            # Download image from LINE using MessagingApiBlob
             print(f"DEBUG: Downloading image {message_id}...")
-            message_content = line_bot_api.get_message_content(message_id)
+            blob_api = MessagingApiBlob(api_client)
+            image_content = blob_api.get_message_content(message_id)
             
             # Read image bytes
-            image_bytes = message_content
+            image_bytes = image_content
             print(f"DEBUG: Image downloaded, size: {len(image_bytes)} bytes")
             
             # Store in context with timestamp
