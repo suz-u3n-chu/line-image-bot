@@ -330,10 +330,10 @@ def generate_image_with_reference(user_id: str, prompt: str, reference_image_byt
         
         print(f"DEBUG: Enhanced prompt created (length: {len(enhanced_prompt)})")
         
-        # Step 3: Generate new image with Imagen
+        # Step 3: Generate new image with Gemini
         try:
             response = genai_client.models.generate_images(
-                model='imagen-4.0-generate-001',
+                model='gemini-3-pro-image-preview',
                 prompt=enhanced_prompt,
                 config=types.GenerateImagesConfig(number_of_images=1)
             )
@@ -417,7 +417,7 @@ def generate_and_send_image(user_id: str, prompt: str):
         # Step 1: AI Image Generation
         try:
             response = genai_client.models.generate_images(
-                model='imagen-4.0-generate-001',
+                model='gemini-3-pro-image-preview',
                 prompt=prompt,
                 config=types.GenerateImagesConfig(number_of_images=1)
             )
