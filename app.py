@@ -304,7 +304,7 @@ def generate_image_with_reference(user_id: str, prompt: str, reference_image_byt
         try:
             print("DEBUG: Editing image with Gemini...")
             response = genai_client.models.generate_images(
-                model='gemini-3-pro-image-preview',
+                model='imagen-4.0-generate-001',
                 prompt=f"元の画像をベースに、以下の編集を行ってください。元の構図や雰囲気はできるだけ保持してください。\n\n編集内容: {prompt}",
                 reference_images=[
                     types.Part.from_bytes(
@@ -394,7 +394,7 @@ def generate_and_send_image(user_id: str, prompt: str):
         # Step 1: AI Image Generation
         try:
             response = genai_client.models.generate_images(
-                model='gemini-3-pro-image-preview',
+                model='imagen-4.0-generate-001',
                 prompt=prompt,
                 config=types.GenerateImagesConfig(number_of_images=1)
             )
