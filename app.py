@@ -269,7 +269,7 @@ def handle_image_message(event):
             line_bot_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=reply_token,
-                    messages=[TextMessage(text="📸 画像を受け取りました！\n次にプロンプトを送ってください。\n\n例：「この建物を夜景にして」「同じ構図で春の風景に」")]
+                    messages=[TextMessage(text="📸 画像を受け取りました！\n編集したい内容を送ってください。\n\n例：「空を夕焼けにして」「この車を赤くして」「壁の色を白に変えて」")]
                 )
             )
             print(f"DEBUG: Image stored for user {user_id}")
@@ -296,54 +296,31 @@ def default_handler(event):
 
 
 def generate_image_with_reference(user_id: str, prompt: str, reference_image_bytes: bytes):
-    """Generate image using reference image understanding + user prompt"""
+    """Edit reference image based on user prompt"""
     try:
-        print(f"DEBUG: Generating image with reference for prompt: '{prompt}'")
+        print(f"DEBUG: Editing image with prompt: '{prompt}'")
         
-        # Step 1: Use Gemini to understand the reference image
+        # Direct image editing: pass reference image + edit prompt to generate_images
         try:
-            print("DEBUG: Analyzing reference image with Gemini...")
-            vision_response = genai_client.models.generate_content(
-                model='gemini-3-flash-preview',
-                contents=[
+            print("DEBUG: Editing image with Gemini...")
+            response = genai_client.models.generate_images(
+                model='gemini-3-pro-image-preview',
+                prompt=f"元の画像をベースに、以下の編集を行ってください。元の構図や雰囲気はできるだけ保持してください。\n\n編集内容: {prompt}",
+                reference_images=[
                     types.Part.from_bytes(
                         data=reference_image_bytes,
                         mime_type='image/jpeg'
-                    ),
-                    "この画像を詳しく説明してください。構図、色調、雰囲気、主要な要素などを含めて。"
-                ]
-            )
-            image_description = vision_response.text
-            print(f"DEBUG: Image understanding complete: {image_description[:100]}...")
-        except Exception as vision_err:
-            print(f"DEBUG: Vision analysis FAILED: {str(vision_err)}")
-            raise Exception(f"画像理解エラー: {str(vision_err)}")
-        
-        # Step 2: Combine understanding with user prompt
-        enhanced_prompt = f"""参照画像の説明:
-{image_description}
-
-ユーザーの要望:
-{prompt}
-
-上記の参照画像の特徴を踏まえつつ、ユーザーの要望を反映した新しい画像を生成してください。"""
-        
-        print(f"DEBUG: Enhanced prompt created (length: {len(enhanced_prompt)})")
-        
-        # Step 3: Generate new image with Gemini
-        try:
-            response = genai_client.models.generate_images(
-                model='gemini-3-pro-image-preview',
-                prompt=enhanced_prompt,
+                    )
+                ],
                 config=types.GenerateImagesConfig(number_of_images=1)
             )
             if not response.generated_images:
                 raise ValueError("Google AI returned no images")
             image_bytes = response.generated_images[0].image.image_bytes
-            print("DEBUG: AI generation SUCCESS")
-        except Exception as gen_err:
-            print(f"DEBUG: AI Generation FAILED: {str(gen_err)}")
-            raise Exception(f"Google AI画像生成エラー: {str(gen_err)}")
+            print("DEBUG: Image editing SUCCESS")
+        except Exception as edit_err:
+            print(f"DEBUG: Image Editing FAILED: {str(edit_err)}")
+            raise Exception(f"画像編集エラー: {str(edit_err)}")
         
         # Step 4: Upload to Cloudinary
         try:
@@ -372,7 +349,7 @@ def generate_image_with_reference(user_id: str, prompt: str, reference_image_byt
                     PushMessageRequest(
                         to=user_id,
                         messages=[
-                            TextMessage(text=f"✨ 参照画像を元に新しい画像を生成しました！\n\nプロンプト: {prompt}"),
+                            TextMessage(text=f"✨ 画像を編集しました！\n\n編集内容: {prompt}"),
                             ImageMessage(
                                 original_content_url=image_url,
                                 preview_image_url=image_url
@@ -402,7 +379,7 @@ def generate_image_with_reference(user_id: str, prompt: str, reference_image_byt
                 line_bot_api.push_message(
                     PushMessageRequest(
                         to=user_id,
-                        messages=[TextMessage(text=f"❌ 参照画像を使った生成中にエラーが発生しました:\n{error_msg}")]
+                        messages=[TextMessage(text=f"❌ 画像編集中にエラーが発生しました:\n{error_msg}")]
                     )
                 )
         except Exception as final_err:
