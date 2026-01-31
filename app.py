@@ -8,6 +8,7 @@ import io
 import logging
 import threading
 from collections import deque
+from datetime import datetime, timedelta
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
@@ -20,7 +21,7 @@ from linebot.v3.messaging import (
     TextMessage,
     ImageMessage
 )
-from linebot.v3.webhooks import MessageEvent, TextMessageContent
+from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent
 from google import genai
 from google.genai import types
 import cloudinary
@@ -69,6 +70,10 @@ if cloudinary_url:
     cloudinary.config(cloudinary_url=cloudinary_url)
 else:
     logger.warning("CLOUDINARY_URL is missing!")
+
+# User image context storage (in-memory)
+# Structure: {user_id: {"image_bytes": bytes, "timestamp": datetime}}
+user_image_context = {}
 
 
 @app.route("/", methods=['GET'])
@@ -180,8 +185,25 @@ def handle_text_message(event):
             )
             print("DEBUG: Reply sent. Starting background thread...")
             
-            # Use background thread to prevent LINE timeouts
-            thread = threading.Thread(target=generate_and_send_image, args=(user_id, user_message))
+            # Check if user has a reference image stored
+            cleanup_old_contexts()  # Clean up expired contexts
+            
+            if user_id in user_image_context:
+                # Use reference image + prompt mode
+                print(f"DEBUG: Found reference image for user {user_id}, using image-to-image mode")
+                reference_bytes = user_image_context[user_id]["image_bytes"]
+                thread = threading.Thread(
+                    target=generate_image_with_reference, 
+                    args=(user_id, user_message, reference_bytes)
+                )
+            else:
+                # Use text-only mode
+                print(f"DEBUG: No reference image for user {user_id}, using text-only mode")
+                thread = threading.Thread(
+                    target=generate_and_send_image, 
+                    args=(user_id, user_message)
+                )
+            
             thread.start()
             
         except Exception as e:
@@ -198,11 +220,193 @@ def handle_text_message(event):
                 logger.error(f"Double crash: {str(reply_err)}")
 
 
+def cleanup_old_contexts():
+    """Remove image contexts older than 10 minutes"""
+    current_time = datetime.now()
+    expired_users = []
+    
+    for user_id, context in user_image_context.items():
+        if current_time - context["timestamp"] > timedelta(minutes=10):
+            expired_users.append(user_id)
+    
+    for user_id in expired_users:
+        del user_image_context[user_id]
+        logger.info(f"Cleaned up expired context for user {user_id}")
+
+
+@handler.add(MessageEvent, message=ImageMessageContent)
+def handle_image_message(event):
+    """Handle incoming image messages and store them for later use"""
+    print(">>> HANDLER: handle_image_message triggered <<<")
+    user_id = event.source.user_id
+    reply_token = event.reply_token
+    message_id = event.message.id
+    
+    print(f"DEBUG: Image received from {user_id}, message_id: {message_id}")
+    
+    with ApiClient(line_configuration) as api_client:
+        line_bot_api = MessagingApi(api_client)
+        
+        try:
+            # Download image from LINE
+            print(f"DEBUG: Downloading image {message_id}...")
+            message_content = line_bot_api.get_message_content(message_id)
+            
+            # Read image bytes
+            image_bytes = message_content
+            print(f"DEBUG: Image downloaded, size: {len(image_bytes)} bytes")
+            
+            # Store in context with timestamp
+            cleanup_old_contexts()  # Clean up old contexts first
+            user_image_context[user_id] = {
+                "image_bytes": image_bytes,
+                "timestamp": datetime.now()
+            }
+            
+            # Send confirmation
+            line_bot_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=reply_token,
+                    messages=[TextMessage(text="📸 画像を受け取りました！\n次にプロンプトを送ってください。\n\n例：「この建物を夜景にして」「同じ構図で春の風景に」")]
+                )
+            )
+            print(f"DEBUG: Image stored for user {user_id}")
+            
+        except Exception as e:
+            print(f"DEBUG ERROR in image handler: {str(e)}")
+            logger.error(f"Error handling image: {str(e)}", exc_info=True)
+            try:
+                line_bot_api.reply_message(
+                    ReplyMessageRequest(
+                        reply_token=reply_token,
+                        messages=[TextMessage(text=f"❌ 画像の処理中にエラーが発生しました:\n{str(e)}")]
+                    )
+                )
+            except Exception as reply_err:
+                logger.error(f"Failed to send error reply: {str(reply_err)}")
+
+
 @handler.default()
 def default_handler(event):
     """Diagnostic handler for all other events"""
     logger.info(f"RECEIVED OTHER EVENT: {type(event).__name__}")
     logger.info(f"Event details: {event}")
+
+
+def generate_image_with_reference(user_id: str, prompt: str, reference_image_bytes: bytes):
+    """Generate image using reference image understanding + user prompt"""
+    try:
+        print(f"DEBUG: Generating image with reference for prompt: '{prompt}'")
+        
+        # Step 1: Use Gemini to understand the reference image
+        try:
+            print("DEBUG: Analyzing reference image with Gemini...")
+            vision_response = genai_client.models.generate_content(
+                model='gemini-2.0-flash-exp',
+                contents=[
+                    types.Part.from_bytes(
+                        data=reference_image_bytes,
+                        mime_type='image/jpeg'
+                    ),
+                    types.Part.from_text(
+                        "この画像を詳しく説明してください。構図、色調、雰囲気、主要な要素などを含めて。"
+                    )
+                ]
+            )
+            image_description = vision_response.text
+            print(f"DEBUG: Image understanding complete: {image_description[:100]}...")
+        except Exception as vision_err:
+            print(f"DEBUG: Vision analysis FAILED: {str(vision_err)}")
+            raise Exception(f"画像理解エラー: {str(vision_err)}")
+        
+        # Step 2: Combine understanding with user prompt
+        enhanced_prompt = f"""参照画像の説明:
+{image_description}
+
+ユーザーの要望:
+{prompt}
+
+上記の参照画像の特徴を踏まえつつ、ユーザーの要望を反映した新しい画像を生成してください。"""
+        
+        print(f"DEBUG: Enhanced prompt created (length: {len(enhanced_prompt)})")
+        
+        # Step 3: Generate new image with Imagen
+        try:
+            response = genai_client.models.generate_images(
+                model='imagen-4.0-generate-001',
+                prompt=enhanced_prompt,
+                config=types.GenerateImagesConfig(number_of_images=1)
+            )
+            if not response.generated_images:
+                raise ValueError("Google AI returned no images")
+            image_bytes = response.generated_images[0].image.image_bytes
+            print("DEBUG: AI generation SUCCESS")
+        except Exception as gen_err:
+            print(f"DEBUG: AI Generation FAILED: {str(gen_err)}")
+            raise Exception(f"Google AI画像生成エラー: {str(gen_err)}")
+        
+        # Step 4: Upload to Cloudinary
+        try:
+            print("DEBUG: Uploading to Cloudinary...")
+            upload_result = cloudinary.uploader.upload(
+                io.BytesIO(image_bytes),
+                folder="line-bot-images",
+                resource_type="image"
+            )
+            image_url = upload_result.get('secure_url')
+            if not image_url:
+                raise ValueError("Cloudinary returned no URL")
+            print(f"DEBUG: Upload SUCCESS: {image_url}")
+        except Exception as up_err:
+            print(f"DEBUG: Cloudinary Upload FAILED: {str(up_err)}")
+            detailed_err = str(up_err)
+            if "api_key" in detailed_err.lower():
+                detailed_err += " (CloudinaryのURL設定が初期値のままの可能性があります)"
+            raise Exception(f"Cloudinaryアップロードエラー: {detailed_err}")
+        
+        # Step 5: Send to LINE
+        try:
+            with ApiClient(line_configuration) as api_client:
+                line_bot_api = MessagingApi(api_client)
+                line_bot_api.push_message(
+                    PushMessageRequest(
+                        to=user_id,
+                        messages=[
+                            TextMessage(text=f"✨ 参照画像を元に新しい画像を生成しました！\n\nプロンプト: {prompt}"),
+                            ImageMessage(
+                                original_content_url=image_url,
+                                preview_image_url=image_url
+                            )
+                        ]
+                    )
+                )
+            print("DEBUG: LINE Push SUCCESS")
+            
+            # Clear the context after successful generation
+            if user_id in user_image_context:
+                del user_image_context[user_id]
+                print(f"DEBUG: Cleared context for user {user_id}")
+                
+        except Exception as line_err:
+            print(f"DEBUG: LINE Push FAILED: {str(line_err)}")
+            raise Exception(f"LINE送信エラー: {str(line_err)}")
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Worker Error (with reference): {error_msg}")
+        
+        # Send error message
+        try:
+            with ApiClient(line_configuration) as api_client:
+                line_bot_api = MessagingApi(api_client)
+                line_bot_api.push_message(
+                    PushMessageRequest(
+                        to=user_id,
+                        messages=[TextMessage(text=f"❌ 参照画像を使った生成中にエラーが発生しました:\n{error_msg}")]
+                    )
+                )
+        except Exception as final_err:
+            logger.error(f"Could not send final error: {str(final_err)}")
 
 
 def generate_and_send_image(user_id: str, prompt: str):
