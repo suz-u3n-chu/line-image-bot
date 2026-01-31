@@ -304,7 +304,7 @@ def generate_image_with_reference(user_id: str, prompt: str, reference_image_byt
         try:
             print("DEBUG: Analyzing reference image with Gemini...")
             vision_response = genai_client.models.generate_content(
-                model='gemini-2.0-flash-exp',
+                model='gemini-1.5-flash',
                 contents=[
                     types.Part.from_bytes(
                         data=reference_image_bytes,
