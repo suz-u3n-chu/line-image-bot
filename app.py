@@ -310,9 +310,7 @@ def generate_image_with_reference(user_id: str, prompt: str, reference_image_byt
                         data=reference_image_bytes,
                         mime_type='image/jpeg'
                     ),
-                    types.Part.from_text(
-                        "この画像を詳しく説明してください。構図、色調、雰囲気、主要な要素などを含めて。"
-                    )
+                    "この画像を詳しく説明してください。構図、色調、雰囲気、主要な要素などを含めて。"
                 ]
             )
             image_description = vision_response.text
